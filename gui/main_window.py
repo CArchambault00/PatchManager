@@ -1,10 +1,11 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from config_manager import INIFileManager
 from registery_manger import RegistryManager
+from patch_generator import generate_patch
+from patch_deployer import deploy_patch_on_envs
 import os
 import subprocess
-import datetime
 
 class MainWindow(tk.Tk):
     def __init__(self, ini_file):
@@ -12,45 +13,115 @@ class MainWindow(tk.Tk):
         self.title("Patch Manager")
         self.geometry("800x600")
 
+        # Load environment variables manually from .env file
+        self.env_vars = self.load_env_file(".env")
+
         # Gestionnaire de fichier INI
         self.ini_manager = INIFileManager(ini_file)
+        self.cyframe_directory = tk.StringVar()
+        self.current_version = tk.StringVar()
 
+        # Load saved directory from .env file if it exists
+        saved_directory = self.env_vars.get("CYFRAME_DIRECTORY")
+        if saved_directory:
+            self.cyframe_directory.set(saved_directory)
+            # If the repo in the saved directory is on main branch show error and exit
+            if self.is_on_main_branch(saved_directory):
+                messagebox.showerror("Error", "The repository is on the main branch. Please create a new branch and try again.")
+                self.destroy()
+
+        # Frame pour le répertoire de l'application
+        directory_frame = ttk.LabelFrame(self, text="Cyframe Application Directory")
+        directory_frame.pack(pady=10, padx=10, fill="both", expand=True)
+
+        self.directory_label = ttk.Label(directory_frame, text="Directory:")
+        self.directory_label.grid(row=0, column=0, padx=5, pady=5)
+        self.directory_entry = ttk.Entry(directory_frame, textvariable=self.cyframe_directory, width=50)
+        self.directory_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        self.directory_button = ttk.Button(directory_frame, text="Browse...", command=self.on_browse_click)
+        self.directory_button.grid(row=0, column=2, padx=5, pady=5)
+
+        version_frame = ttk.LabelFrame(self, text="Patch Version")
+        version_frame.pack(pady=10, padx=10, fill="x")
+
+        self.version_label = ttk.Label(version_frame, text="Current Version:")
+        self.version_label.grid(row=0, column=0, padx=5, pady=5)
+
+        self.version_entry = ttk.Entry(version_frame, textvariable=self.current_version, state='readonly', width=10)
+        self.version_entry.grid(row=0, column=1, padx=5, pady=5)
+
+        self.load_current_version()
+
+        # self.keep_version_button = ttk.Button(version_frame, text="Keep Version", command=self.on_keep_version_click)
+        # self.keep_version_button.grid(row=0, column=2, padx=5, pady=5)
+
+        self.next_version_button = ttk.Button(version_frame, text="Next Version", command=self.on_next_version_click)
+        self.next_version_button.grid(row=0, column=3, padx=5, pady=5)
+
+        # Add a new large button below the other buttons
+        self.create_patch_button = ttk.Button(version_frame, text="Create Patch", command=self.on_create_patch_click)
+        self.create_patch_button.grid(row=1, column=0, columnspan=4, padx=5, pady=5, sticky="ew")
+
+       
         # Frame pour les environnements
         env_frame = ttk.LabelFrame(self, text="Environments")
         env_frame.pack(pady=10, padx=10, fill="both", expand=True)
 
-        # Liste déroulante pour les environnements (remplacée par une ListBox)
         self.env_listbox = tk.Listbox(env_frame, selectmode=tk.MULTIPLE)
         self.env_listbox.pack(pady=10, padx=10, fill="both", expand=True)
-
-        # Charger les environnements disponibles
         self.load_environments()
 
         # Frame pour les informations utilisateur
         user_frame = ttk.LabelFrame(self, text="User Information")
         user_frame.pack(pady=10, padx=10, fill="x")
 
-        # Champ pour le nom d'utilisateur
         self.username_label = ttk.Label(user_frame, text="Username:")
         self.username_label.grid(row=0, column=0, padx=5, pady=5)
         self.username_entry = ttk.Entry(user_frame)
         self.username_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
 
-        # Champ pour le mot de passe
         self.password_label = ttk.Label(user_frame, text="Password:")
         self.password_label.grid(row=1, column=0, padx=5, pady=5)
-        self.password_entry = ttk.Entry(user_frame, show="*")  # Masquer les caractères
+        self.password_entry = ttk.Entry(user_frame, show="*")
         self.password_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
 
-        # Bouton OK
-        self.ok_button = ttk.Button(self, text="OK", command=self.on_ok_click)
+        self.ok_button = ttk.Button(self, text="Test Patch on envs", command=self.test_patch_on_envs)
         self.ok_button.pack(pady=20)
 
-        # Variables pour la planification
-        self.schedule_date = None  # Date de planification (si définie)
+    def on_browse_click(self):
+        directory = filedialog.askdirectory()
+        if directory:
+            self.cyframe_directory.set(directory)
+            self.update_env_file(".env", "CYFRAME_DIRECTORY", directory)
+
+    def load_current_version(self):
+        version = self.get_latest_tag()
+        if not version:
+            version = "v1.0.0"
+        self.current_version.set(version)
+
+    # def on_keep_version_click(self):
+    #     version = self.current_version.get()
+    #     if version:
+    #         self.update_env_file(".env", "CURRENT_VERSION", version)
+    #         self.force_push_tag(version)
+    #         messagebox.showinfo("Info", f"Version {version} kept and pushed as a tag.")
+    #     else:
+    #         messagebox.showwarning("Warning", "No version to keep.")
+
+    def on_next_version_click(self):
+        latest_tag = self.get_latest_tag()
+        if latest_tag:
+            version_parts = latest_tag[1:].split('.')  # Remove 'v' prefix
+            major = int(version_parts[0])
+            minor = int(version_parts[1]) if len(version_parts) > 1 else 0
+            patch = int(version_parts[2]) + 1 if len(version_parts) > 2 else 0
+            new_version = f"v{major}.{minor}.{patch}"
+        else:
+            new_version = "v1.0.0"
+        self.current_version.set(new_version)
 
     def load_environments(self):
-        """Charge les environnements disponibles dans la ListBox."""
         environments = self.ini_manager.get_environments()
         if environments:
             for env in environments:
@@ -58,156 +129,137 @@ class MainWindow(tk.Tk):
         else:
             messagebox.showwarning("Warning", "No environments found in the INI file.")
 
-    def on_ok_click(self):
-        """Gère le clic sur le bouton OK."""
-        # Récupérer les environnements sélectionnés
+    def test_patch_on_envs(self):
         selected_envs = [self.env_listbox.get(i) for i in self.env_listbox.curselection()]
         if not selected_envs:
             messagebox.showwarning("Warning", "Please select at least one environment.")
             return
+        
+        # Check if version exist in CYFRAME_DIRECTORY/Patches
+        version = self.current_version.get()
+        if not version:
+            messagebox.showwarning("Warning", "No version to test a patch for.")
+            return
+        
+        directory = self.cyframe_directory.get()
+        if not directory or not os.path.isdir(directory):
+            messagebox.showwarning("Warning", "Invalid Cyframe directory.")
+            return
+        
+        patch_directory = os.path.join(directory, "Patches", version)
+        if not os.path.isdir(patch_directory):
+            messagebox.showwarning("Warning", f"Patch for version {version} not found in Patches.")
+            return
 
-        # Récupérer le nom d'utilisateur et le mot de passe
         username = self.username_entry.get()
         password = self.password_entry.get()
-
         if not username or not password:
             messagebox.showwarning("Warning", "Please enter your username and password.")
             return
+        
+        deploy_patch_on_envs(selected_envs, patch_directory, username, password, self.ini_manager)
 
-        # Vérifier si une date de planification est définie
-        if self.schedule_date and self.schedule_date > datetime.datetime.now():
-            self.write_param_file(selected_envs, username, password)
-            self.schedule_task()
-        else:
-            self.run_patch(selected_envs, username, password)
+    def load_env_file(self, filepath):
+        env_vars = {}
+        if os.path.exists(filepath):
+            with open(filepath, "r") as file:
+                for line in file:
+                    line = line.strip()
+                    if line and "=" in line:
+                        key, value = line.split("=", 1)
+                        env_vars[key.strip()] = value.strip()
+        return env_vars
 
-    def write_param_file(self, environments, username, password):
-        """Écrit les paramètres dans un fichier pour une exécution planifiée."""
-        param_file = os.path.join(os.getcwd(), "params.txt")
-        with open(param_file, "w") as f:
-            f.write(f"USERNAME={username}\n")
-            f.write(f"PASSWORD={password}\n")
-            for env in environments:
-                f.write(f"ENVIRONMENT={env}\n")
-        print(f"Paramètres écrits dans {param_file}")
+    def update_env_file(self, filepath, key, value):
+        env_vars = self.load_env_file(filepath)
+        env_vars[key] = value
+        with open(filepath, "w") as file:
+            for k, v in env_vars.items():
+                file.write(f"{k}={v}\n")
 
-    def schedule_task(self):
-        """Planifie l'exécution du patch."""
+    def get_latest_tag(self):
+        directory = self.cyframe_directory.get()
+        if directory and os.path.isdir(directory):
+            try:
+                # Fetch the latest tags from the remote repository
+                subprocess.run(
+                    ["git", "fetch", "--tags"],
+                    cwd=directory,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                
+                # Now get the latest tag from the remote
+                result = subprocess.run(
+                    ["git", "describe", "--tags", "--abbrev=0"],
+                    cwd=directory,
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode == 0:
+                    return result.stdout.strip()
+            except subprocess.CalledProcessError as e:
+                print(f"Error fetching latest tag: {e}")
+            except Exception as e:
+                print(f"Unexpected error: {e}")
+        return None
+
+    def force_push_tag(self, tag):
+        directory = self.cyframe_directory.get()
+        if directory and os.path.isdir(directory):
+            try:
+                subprocess.run(
+                    ["git", "tag", "-f", tag],
+                    cwd=directory,
+                    check=True
+                )
+                subprocess.run(
+                    ["git", "push", "-f", "origin", tag],
+                    cwd=directory,
+                    check=True
+                )
+            except Exception as e:
+                messagebox.showerror("Error", f"Error pushing tag: {e}")
+
+    def is_on_main_branch(self, directory):
         try:
-            task_name = "PatchManagerTask"
-            task_time = self.schedule_date.strftime("%H:%M")
-            task_date = self.schedule_date.strftime("%d/%m/%Y")
-            command = f'schtasks /create /tn "{task_name}" /tr "{os.path.join(os.getcwd(), "run_patch.bat")}" /sc once /st {task_time} /sd {task_date}'
-            subprocess.run(command, shell=True, check=True)
-            messagebox.showinfo("Info", "Tâche planifiée avec succès.")
-        except subprocess.CalledProcessError as e:
-            messagebox.showerror("Error", f"Erreur lors de la planification de la tâche : {e}")
-
-    def run_patch(self, environments, username, password):
-        """Exécute le patch immédiatement."""
-        try:
-            # Exécuter les scripts SQL pour chaque environnement
-            for env in environments:
-                self.execute_sql_script(env, username, password)
-
-            # Valider les objets de la base de données
-            self.validate_database_objects(environments)
-
-            # Copier les fichiers web
-            self.copy_web_files(environments)
-
-            self.copy_crystal_files(environments)
-
-            # Notifier le serveur web
-            self.notify_web_server(environments, username)
-
-            messagebox.showinfo("Info", "Patch appliqué avec succès.")
+            result = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=directory,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0:
+                return result.stdout.strip() == "main"
         except Exception as e:
-            messagebox.showerror("Error", f"Erreur lors de l'application du patch : {e}")
-
-    def execute_sql_script(self, environment, username, password):
-        """Execute a SQL script for a given environment, similar to the VB code."""
-        script_path = os.path.join(os.getcwd(), "MainSQL.sql")
-        log_path = os.path.join(os.getcwd(), "SQL.log")
-        if not os.path.exists(script_path):
-            print(f"Script file not found: {script_path}")
+            print(f"Error checking current branch: {e}")
+        return False
+    
+    def on_create_patch_click(self):
+        version = self.current_version.get()
+        if version:
+            self.update_env_file(".env", "CURRENT_VERSION", version)
+            self.force_push_tag(version)
+            messagebox.showinfo("Info", f"Version {version} kept and pushed as a tag.")
+        else:
+            messagebox.showwarning("Warning", "No version to keep.")
             return
 
-        # Execute SQL*Plus with the script and input text
-        try:
-            connectionString = self.ini_manager.read_key(environment, "CONNECTSTRING", "not set")
-            if connectionString == "not set":
-                raise Exception("Connection string not found in INI file.")
-            host = connectionString.split(";")[3].split("=")[1]
-            print(f"Executing SQL script for {environment} on {host}...")
-            # Prepare the input text for SQL*Plus
-            input_text = f"{host}\n{username}\n"
-            # Use subprocess.Popen to handle input and output streams
-            process = subprocess.Popen(
-                ["sqlplus.exe", "/nolog", f"@{script_path}"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                shell=True
-            )
-
-            # Write the input text to SQL*Plus
-            stdout, stderr = process.communicate(input=input_text)
-
-            # Log the output to a file
-            with open(log_path, "w") as log_file:
-                log_file.write(stdout)
-
-            # Check for errors in the output
-            if "SP2-" in stdout or "ORA-" in stdout:
-                print("SQL*Plus encountered errors. Check the log file for details.")
-                return False
-
-            print(f"SQL script executed successfully for {environment}")
-            return True
-
-        except subprocess.CalledProcessError as e:
-            print(f"Error executing SQL*Plus: {e}")
-            return False
-        except Exception as e:
-            print(f"Unexpected error: {e}")
-            return False
-
-    def validate_database_objects(self, environments):
-        """Valide les objets de la base de données."""
-        for env in environments:
-            print(f"Validation des objets de la base de données pour {env}...")
-            # Logique de validation (à implémenter)
-
-    def copy_web_files(self, environments):
-        """Copie les fichiers web pour chaque environnement."""
-        for env in environments:
-            web_source = os.path.join(os.getcwd(), "Web")
-            web_dest = self.ini_manager.read_key(env, "WEB_PATH", "not set")
-            if web_dest != "not set":
-                command = f'xcopy "{web_source}" "{web_dest}" /s /y /r'
-                subprocess.run(command, shell=True, check=True)
-                print(f"Fichiers web copiés pour {env}")
-
-    def copy_crystal_files(self, environments):
-        """Copie les fichiers web pour chaque environnement."""
-        for env in environments:
-            web_source = os.path.join(os.getcwd(), "Crystal")
-            web_dest = self.ini_manager.read_key(env, "WEB_PATH", "not set")
-            if web_dest != "not set":
-                full_dest_path = os.path.join(web_dest, "Crystal")
-            
-                # Créer le dossier s'il n'existe pas
-                os.makedirs(full_dest_path, exist_ok=True)
-                
-                command = f'xcopy "{web_source}" "{full_dest_path}" /s /y /r'
-                subprocess.run(command, shell=True, check=True)
-                print(f"Fichiers web copiés pour {env}")
-
-
-    def notify_web_server(self, environments, username):
-        """Notifie le serveur web que le patch a été appliqué."""
-        for env in environments:
-            print(f"Notification du serveur web pour {env} en tant que {username}...")
-            # Logique de notification (à implémenter)
+        # version = self.env_vars.get("CURRENT_VERSION")
+        # if not version:
+        #     messagebox.showwarning("Warning", "No version to create a patch for.")
+        #     return
+        
+        # Check if the directory is valid
+        directory = self.cyframe_directory.get()
+        if not directory or not os.path.isdir(directory):
+            messagebox.showwarning("Warning", "Invalid Cyframe directory.")
+            return
+        
+        # Check if the repository is on the main branch
+        if self.is_on_main_branch(directory):
+            messagebox.showerror("Error", "The repository is on the main branch. Please create a new branch and try again.")
+            return
+        
+        generate_patch(directory, version)

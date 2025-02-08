@@ -1,6 +1,7 @@
 from registery_manger import RegistryManager
 from gui.main_window import MainWindow
 import winreg
+import os
 
 def get_ini_path_from_registry():
     """
@@ -17,12 +18,10 @@ def get_ini_path_from_registry():
         print(f"Fichier INI trouvé (32 bits) : {ini_path}")
         return ini_path + "CMATC.INI"
 
-
 if __name__ == "__main__":
     # Récupérer le chemin du fichier INI depuis le registre
     ini_file = get_ini_path_from_registry()
     if ini_file:
-        print(f"Fichier INI trouvé : {ini_file}")
         # Lancement de l'interface graphique avec le fichier INI
         app = MainWindow(ini_file)
         app.mainloop()
