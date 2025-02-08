@@ -1,4 +1,4 @@
-from registery_manger import RegistryManager
+from registery_manager import RegistryManager
 from gui.main_window import MainWindow
 import winreg
 import os

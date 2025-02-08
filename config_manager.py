@@ -7,12 +7,10 @@ class INIFileManager:
         self.config = configparser.ConfigParser(strict=False)
 
     def _sanitize_ini_file(self):
-        """Reads the INI file and removes lines that start with invalid characters."""
         sanitized_lines = []
         try:
             with open(self.filename, "r", encoding="utf-8") as f:
                 for line in f:
-                    # Remove lines that start with '//' or "'"
                     if not re.match(r"^\s*(//|')", line):
                         sanitized_lines.append(line)
 
@@ -26,7 +24,6 @@ class INIFileManager:
             return None
 
     def _read_config(self):
-        """Reads the sanitized INI file."""
         sanitized_file = self._sanitize_ini_file()
         if sanitized_file:
             self.config.read(sanitized_file, encoding="utf-8")
@@ -52,12 +49,10 @@ class INIFileManager:
         return self.config.sections()
 
     def get_environments(self):
-        """Returns section names that start with 'ENV'."""
         sections = self.read_section_names()
         return [section for section in sections if section.startswith("ENV")]
 
     def merge_duplicate_sections(self):
-        """Merges duplicate sections in the INI file."""
         self._read_config()
         merged_sections = {}
 
